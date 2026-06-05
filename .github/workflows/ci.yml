@@ -1,6 +1,7 @@
 name: CI
 
-on: [push, pull_request, workflow_dispatch]
+# Automatic CI is disabled; this workflow only runs when triggered manually.
+on: [workflow_dispatch]
 
 permissions: {}
 

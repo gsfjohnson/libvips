@@ -152,7 +152,6 @@ jobs:
             mingw-w64-clang-x86_64-fftw
             mingw-w64-clang-x86_64-libheif
             mingw-w64-clang-x86_64-libimagequant
-            mingw-w64-clang-x86_64-cgif
             mingw-w64-clang-x86_64-librsvg
             mingw-w64-clang-x86_64-pango
             mingw-w64-clang-x86_64-libarchive
