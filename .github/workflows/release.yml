@@ -1,0 +1,184 @@
+name: Release
+
+# Build static libvips libraries for clang-based consumers and attach
+# the resulting zips to the GitHub release that triggered this run.
+on:
+  release:
+    types: [published]
+  # Allow manual builds against an existing tag for testing.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to build and attach assets to'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  # The tag we are building. `release` events provide it directly;
+  # `workflow_dispatch` runs take it from the manual input.
+  RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+  # Shared meson configuration for a static, clang-friendly library build.
+  # Modules require a shared library, so they are disabled here. We also
+  # drop everything that is not part of a library package (tools, docs,
+  # examples, tests, introspection, vapi).
+  MESON_COMMON_ARGS: >-
+    --buildtype=release
+    --default-library=static
+    --prefer-static
+    -Dmodules=disabled
+    -Dintrospection=disabled
+    -Dvapi=false
+    -Ddocs=false
+    -Dcpp-docs=false
+    -Dexamples=false
+    -Dman=false
+    -Dtests=false
+    -Dtools=false
+    -Dcplusplus=true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Linux (clang) and macOS (clang)
+  # ---------------------------------------------------------------------------
+  build-unix:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: 'Linux x64 (clang)'
+            os: ubuntu-24.04
+            platform: linux-x64
+          - name: 'macOS arm64 (clang)'
+            os: macos-15
+            platform: macos-arm64
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Ubuntu dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang lld zip \
+            meson ninja-build pkg-config \
+            libarchive-dev libcgif-dev libexif-dev \
+            libexpat1-dev libffi-dev libfftw3-dev \
+            libheif-dev libhwy-dev libimagequant-dev \
+            libjpeg-dev libjxl-dev liblcms2-dev \
+            libpango1.0-dev libpng-dev librsvg2-dev \
+            libspng-dev libtiff5-dev libwebp-dev \
+            libglib2.0-dev libopenjp2-7-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          pip3 install meson --break-system-packages
+          brew update
+          brew install \
+            ninja pkgconf zip \
+            cgif fftw fontconfig glib highway \
+            jpeg-xl libarchive libexif libheif \
+            libimagequant libpng librsvg libspng \
+            libtiff little-cms2 openjpeg pango webp
+
+      - name: Prepare macOS environment
+        if: runner.os == 'macOS'
+        run: |
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig:$PKG_CONFIG_PATH" >> "$GITHUB_ENV"
+
+      - name: Configure, build and install libvips
+        run: |
+          PKG="libvips-${RELEASE_TAG}-${{ matrix.platform }}-static"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          meson setup build --prefix="$PWD/$PKG" $MESON_COMMON_ARGS \
+            || (cat build/meson-logs/meson-log.txt && exit 1)
+          meson compile -C build
+          meson install -C build
+
+      - name: Package as zip
+        run: zip -r "$PKG.zip" "$PKG"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: ${{ env.PKG }}.zip
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: ${{ env.PKG }}.zip
+
+  # ---------------------------------------------------------------------------
+  # Windows (MSYS2 clang64)
+  # ---------------------------------------------------------------------------
+  build-windows:
+    name: 'Windows x64 (MSYS2 clang64)'
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up MSYS2 (clang64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            zip
+            mingw-w64-clang-x86_64-cc
+            mingw-w64-clang-x86_64-meson
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-glib2
+            mingw-w64-clang-x86_64-expat
+            mingw-w64-clang-x86_64-libffi
+            mingw-w64-clang-x86_64-libjpeg-turbo
+            mingw-w64-clang-x86_64-libpng
+            mingw-w64-clang-x86_64-libspng
+            mingw-w64-clang-x86_64-libtiff
+            mingw-w64-clang-x86_64-libwebp
+            mingw-w64-clang-x86_64-libexif
+            mingw-w64-clang-x86_64-lcms2
+            mingw-w64-clang-x86_64-fftw
+            mingw-w64-clang-x86_64-libheif
+            mingw-w64-clang-x86_64-libimagequant
+            mingw-w64-clang-x86_64-cgif
+            mingw-w64-clang-x86_64-librsvg
+            mingw-w64-clang-x86_64-pango
+            mingw-w64-clang-x86_64-libarchive
+            mingw-w64-clang-x86_64-openjpeg2
+            mingw-w64-clang-x86_64-libjxl
+            mingw-w64-clang-x86_64-highway
+
+      - name: Configure, build and install libvips
+        shell: msys2 {0}
+        run: |
+          PKG="libvips-${RELEASE_TAG}-windows-clang64-x64-static"
+          echo "PKG=$PKG" >> "$GITHUB_ENV"
+          meson setup build --prefix="$PWD/$PKG" $MESON_COMMON_ARGS \
+            || (cat build/meson-logs/meson-log.txt && exit 1)
+          meson compile -C build
+          meson install -C build
+          zip -r "$PKG.zip" "$PKG"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PKG }}
+          path: ${{ env.PKG }}.zip
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: ${{ env.PKG }}.zip
